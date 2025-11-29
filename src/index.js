@@ -67,7 +67,19 @@ async function handleWebSocket(request, env) {
   
 	const url = new URL(request.url);
 	const pathAndQuery = url.pathname + url.search;
-	const targetUrl = `wss://generativelanguage.googleapis.com${pathAndQuery}`;
+	let targetUrl = '';
+  
+  // 转换前端WebSocket路径为Gemini API期望的格式
+  if (pathAndQuery.includes('BidiGenerateContent')) {
+    // 前端使用的是 gRPC WebSocket 格式，需要转换为 REST WebSocket 格式
+    // 从查询参数中获取模型信息或使用默认模型
+    const model = 'gemini-2.0-flash-exp';
+    const apiVersion = 'v1beta';
+    targetUrl = `wss://generativelanguage.googleapis.com/${apiVersion}/models/${model}:BidiGenerateContent${url.search}`;
+  } else {
+    // 其他情况直接转发
+    targetUrl = `wss://generativelanguage.googleapis.com${pathAndQuery}`;
+  }
 	  
 	console.log('Target URL:', targetUrl);
   
