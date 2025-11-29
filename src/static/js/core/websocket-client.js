@@ -150,6 +150,7 @@ export class MultimodalLiveClient extends EventEmitter {
 
     /**
      * Sends real-time input data to the server.
+     * Since we're no longer using WebSocket, this method is a no-op for now.
      *
      * @param {Array} chunks - An array of media chunks to send. Each chunk should have a mimeType and data.
      */
@@ -172,19 +173,20 @@ export class MultimodalLiveClient extends EventEmitter {
         const message = hasAudio && hasVideo ? 'audio + video' : hasAudio ? 'audio' : hasVideo ? 'video' : 'unknown';
         Logger.debug(`Sending realtime input: ${message} (${Math.round(totalSize/1024)}KB)`);
 
-        const data = { realtimeInput: { mediaChunks: chunks } };
-        this._sendDirect(data);
-        //this.log(`client.realtimeInput`, message);
+        // 暂时不支持实时输入
+        console.warn('Realtime input is not supported with REST API');
     }
 
     /**
      * Sends a tool response to the server.
+     * Since we're no longer using WebSocket, this method is a no-op for now.
      *
      * @param {Object} toolResponse - The tool response to send.
      */
     sendToolResponse(toolResponse) {
         const message = { toolResponse };
-        this._sendDirect(message);
+        // 暂时不支持工具响应
+        console.warn('Tool response is not supported with REST API');
         this.log(`client.toolResponse`, message);
     }
 
