@@ -207,11 +207,36 @@ export class MultimodalLiveClient extends EventEmitter {
             }
             return part;
         });
-        const content = { role: 'user', parts: formattedParts };
+        // 提取文本内容，转换为OpenAI格式
+        const textContent = formattedParts.map(part => part.text).join(' ');
         
         try {
-            // 使用REST API发送消息
-            const response = await fetch(`${this.apiBaseUrl}/v1/chat/completions`, {
+            // 使用REST API发送消息，确保使用OpenAI格式
+            const apiUrl = `${this.apiBaseUrl}/v1/chat/completions`;
+            console.log('Sending request to:', apiUrl);
+            console.log('Request headers:', {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${this.apiKey.substring(0, 10)}...`
+            });
+            
+            const openAiMessages = [
+                {
+                    role: 'system',
+                    content: this.config.systemInstruction.parts[0].text
+                },
+                {
+                    role: 'user',
+                    content: textContent
+                }
+            ];
+            
+            console.log('Request body:', JSON.stringify({
+                model: this.config.model,
+                messages: openAiMessages,
+                stream: true
+            }));
+            
+            const response = await fetch(apiUrl, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -219,12 +244,16 @@ export class MultimodalLiveClient extends EventEmitter {
                 },
                 body: JSON.stringify({
                     model: this.config.model,
-                    messages: [{ role: 'system', content: this.config.systemInstruction.parts[0].text }, content],
+                    messages: openAiMessages,
                     stream: true
                 })
             });
             
+            console.log('Response status:', response.status);
+            console.log('Response headers:', response.headers);
+            
             if (response.ok) {
+                console.log('Response is ok, handling streaming...');
                 // 处理流式响应
                 const reader = response.body.getReader();
                 const decoder = new TextDecoder();
@@ -232,20 +261,28 @@ export class MultimodalLiveClient extends EventEmitter {
                 
                 while (true) {
                     const { done, value } = await reader.read();
-                    if (done) break;
+                    if (done) {
+                        console.log('Streaming done');
+                        break;
+                    }
                     
-                    buffer += decoder.decode(value, { stream: true });
+                    const chunk = decoder.decode(value, { stream: true });
+                    console.log('Received chunk:', chunk);
+                    buffer += chunk;
                     const lines = buffer.split('\n');
                     buffer = lines.pop();
                     
                     for (const line of lines) {
                         if (line.startsWith('data: ')) {
                             const data = line.slice(6);
+                            console.log('Received SSE data:', data);
                             if (data === '[DONE]') continue;
                             
                             try {
                                 const json = JSON.parse(data);
+                                console.log('Parsed SSE data:', json);
                                 if (json.choices && json.choices[0].delta.content) {
+                                    console.log('Emitting content:', json.choices[0].delta.content);
                                     this.emit('content', {
                                         modelTurn: {
                                             parts: [{ text: json.choices[0].delta.content }]
@@ -254,15 +291,26 @@ export class MultimodalLiveClient extends EventEmitter {
                                 }
                             } catch (error) {
                                 console.error('Error parsing SSE data:', error);
+                                console.error('Raw SSE data:', data);
                             }
                         }
                     }
                 }
             } else {
-                const error = await response.json();
-                this.emit('error', new Error(error.error?.message || 'Failed to send message'));
+                console.log('Response not ok, handling error...');
+                try {
+                    const error = await response.json();
+                    console.error('API Error:', error);
+                    this.emit('error', new Error(error.error?.message || 'Failed to send message'));
+                } catch (parseError) {
+                    const text = await response.text();
+                    console.error('Error parsing error response:', parseError);
+                    console.error('Raw error response:', text);
+                    this.emit('error', new Error(`Failed to send message: ${response.status} ${text}`));
+                }
             }
         } catch (error) {
+            console.error('Fetch error:', error);
             this.emit('error', error);
         }
         
