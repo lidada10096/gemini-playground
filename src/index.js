@@ -180,6 +180,28 @@ async function handleWebSocket(request, env) {
      timestamp: new Date().toISOString(),
      readyState: targetWebSocket.readyState
      });
+     // 向客户端发送错误信息
+     if (proxy.readyState === WebSocket.OPEN) {
+       proxy.send(JSON.stringify({ error: `Gemini WebSocket error: ${error.message}` }));
+     }
+   });
+   
+   // 添加更详细的日志记录
+   targetWebSocket.addEventListener("message", (event) => {
+     console.log('Gemini message received:', {
+     data: event.data,
+     dataType: typeof event.data,
+     timestamp: new Date().toISOString()
+     });
+     
+     try {
+     if (proxy.readyState === WebSocket.OPEN) {
+       proxy.send(event.data);
+       console.log('Successfully forwarded message to client');
+     }
+     } catch (error) {
+     console.error('Error forwarding to client:', error);
+     }
    });
 
  

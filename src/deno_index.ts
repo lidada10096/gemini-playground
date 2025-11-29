@@ -74,6 +74,18 @@ async function handleWebSocket(req: Request): Promise<Response> {
 
   targetWs.onerror = (error) => {
     console.error('Gemini WebSocket error:', error);
+    // 向客户端发送错误信息
+    if (clientWs.readyState === WebSocket.OPEN) {
+      clientWs.send(JSON.stringify({ error: `Gemini WebSocket error: ${error.message}` }));
+    }
+  };
+  
+  // 添加更详细的日志记录
+  targetWs.onmessage = (event) => {
+    console.log('Gemini message received:', event.data);
+    if (clientWs.readyState === WebSocket.OPEN) {
+      clientWs.send(event.data);
+    }
   };
 
   return response;

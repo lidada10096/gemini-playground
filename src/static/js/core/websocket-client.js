@@ -39,10 +39,10 @@ export class MultimodalLiveClient extends EventEmitter {
     }
 
     /**
-     * Connects to the WebSocket server with the given configuration.
-     * The configuration can include model settings, generation config, system instructions, and tools.
+     * Initializes the client with the given configuration.
+     * Since we're no longer using WebSocket, this method just stores the configuration.
      *
-     * @param {Object} config - The configuration for the connection.
+     * @param {Object} config - The configuration for the client.
      * @param {string} config.model - The model to use (e.g., 'gemini-2.0-flash-exp').
      * @param {Object} config.generationConfig - Configuration for content generation.
      * @param {string[]} config.generationConfig.responseModalities - The modalities for the response (e.g., "audio", "text").
@@ -53,10 +53,9 @@ export class MultimodalLiveClient extends EventEmitter {
      * @param {Object[]} config.systemInstruction.parts - Parts of the system instruction.
      * @param {string} config.systemInstruction.parts[].text - Text content of the instruction part.
      * @param {Object[]} [config.tools] - Additional tools to be used by the model.
-     * @returns {Promise<boolean>} - Resolves with true when the connection is established.
-     * @throws {ApplicationError} - Throws an error if the connection fails.
+     * @returns {Promise<boolean>} - Resolves with true when initialized.
      */
-    connect(config,apiKey) {
+    connect(config, apiKey) {
         this.config = {
             ...config,
             tools: [
@@ -64,76 +63,27 @@ export class MultimodalLiveClient extends EventEmitter {
                 ...(config.tools || [])
             ]
         };
-        const ws = new WebSocket(`${this.baseUrl}?key=${apiKey}`);
-
-        ws.addEventListener('message', async (evt) => {
-            if (evt.data instanceof Blob) {
-                this.receive(evt.data);
-            } else {
-                console.log('Non-blob message', evt);
-            }
-        });
-
-        return new Promise((resolve, reject) => {
-            const onError = (ev) => {
-                this.disconnect(ws);
-                const message = `Could not connect to "${this.url}"`;
-                this.log(`server.${ev.type}`, message);
-                throw new ApplicationError(
-                    message,
-                    ErrorCodes.WEBSOCKET_CONNECTION_FAILED,
-                    { originalError: ev }
-                );
-            };
-
-            ws.addEventListener('error', onError);
-            ws.addEventListener('open', (ev) => {
-                if (!this.config) {
-                    reject('Invalid config sent to `connect(config)`');
-                    return;
-                }
-                this.log(`client.${ev.type}`, 'Connected to socket');
-                this.emit('open');
-
-                this.ws = ws;
-
-                const setupMessage = { setup: this.config };
-                this._sendDirect(setupMessage);
-                this.log('client.send', 'setup');
-
-                ws.removeEventListener('error', onError);
-                ws.addEventListener('close', (ev) => {
-                    this.disconnect(ws);
-                    let reason = ev.reason || '';
-                    if (reason.toLowerCase().includes('error')) {
-                        const prelude = 'ERROR]';
-                        const preludeIndex = reason.indexOf(prelude);
-                        if (preludeIndex > 0) {
-                            reason = reason.slice(preludeIndex + prelude.length + 1);
-                        }
-                    }
-                    this.log(`server.${ev.type}`, `Disconnected ${reason ? `with reason: ${reason}` : ''}`);
-                    this.emit('close', { code: ev.code, reason });
-                });
-                resolve(true);
-            });
-        });
+        this.apiKey = apiKey;
+        
+        // 模拟连接成功
+        this.log('client.open', 'Connected to socket');
+        this.emit('open');
+        
+        return Promise.resolve(true);
     }
 
     /**
-     * Disconnects from the WebSocket server.
+     * Disconnects the client.
+     * Since we're no longer using WebSocket, this method just resets the state.
      *
-     * @param {WebSocket} [ws] - The WebSocket instance to disconnect. If not provided, defaults to the current instance.
      * @returns {boolean} - True if disconnected, false otherwise.
      */
-    disconnect(ws) {
-        if ((!ws || this.ws === ws) && this.ws) {
-            this.ws.close();
-            this.ws = null;
-            this.log('client.close', 'Disconnected');
-            return true;
-        }
-        return false;
+    disconnect() {
+        this.config = null;
+        this.apiKey = null;
+        this.log('client.close', 'Disconnected');
+        this.emit('close', { code: 0, reason: 'Client disconnected' });
+        return true;
     }
 
     /**
@@ -239,12 +189,12 @@ export class MultimodalLiveClient extends EventEmitter {
     }
 
     /**
-     * Sends a message to the server.
+     * Sends a message to the server using REST API.
      *
      * @param {string|Object|Array} parts - The message parts to send. Can be a string, an object, or an array of strings/objects.
      * @param {boolean} [turnComplete=true] - Indicates if this message completes the current turn.
      */
-    send(parts, turnComplete = true) {
+    async send(parts, turnComplete = true) {
         parts = Array.isArray(parts) ? parts : [parts];
         const formattedParts = parts.map(part => {
             if (typeof part === 'string') {
@@ -255,24 +205,76 @@ export class MultimodalLiveClient extends EventEmitter {
             return part;
         });
         const content = { role: 'user', parts: formattedParts };
-        const clientContentRequest = { clientContent: { turns: [content], turnComplete } };
-        this._sendDirect(clientContentRequest);
-        this.log(`client.send`, clientContentRequest);
+        
+        try {
+            // 使用REST API发送消息
+            const response = await fetch(`${this.apiBaseUrl}/v1/chat/completions`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${this.apiKey}`
+                },
+                body: JSON.stringify({
+                    model: this.config.model,
+                    messages: [{ role: 'system', content: this.config.systemInstruction.parts[0].text }, content],
+                    stream: true
+                })
+            });
+            
+            if (response.ok) {
+                // 处理流式响应
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+                
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop();
+                    
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            const data = line.slice(6);
+                            if (data === '[DONE]') continue;
+                            
+                            try {
+                                const json = JSON.parse(data);
+                                if (json.choices && json.choices[0].delta.content) {
+                                    this.emit('content', {
+                                        modelTurn: {
+                                            parts: [{ text: json.choices[0].delta.content }]
+                                        }
+                                    });
+                                }
+                            } catch (error) {
+                                console.error('Error parsing SSE data:', error);
+                            }
+                        }
+                    }
+                }
+            } else {
+                const error = await response.json();
+                this.emit('error', new Error(error.error?.message || 'Failed to send message'));
+            }
+        } catch (error) {
+            this.emit('error', error);
+        }
+        
+        this.log(`client.send`, { content });
     }
 
     /**
-     * Sends a message directly to the WebSocket server.
+     * Sends real-time input data to the server.
+     * Since we're no longer using WebSocket, this method is a no-op for now.
      *
-     * @param {Object} request - The request to send.
-     * @throws {Error} - Throws an error if the WebSocket is not connected.
-     * @private
+     * @param {Array} chunks - An array of media chunks to send. Each chunk should have a mimeType and data.
      */
-    _sendDirect(request) {
-        if (!this.ws) {
-            throw new Error('WebSocket is not connected');
-        }
-        const str = JSON.stringify(request);
-        this.ws.send(str);
+    sendRealtimeInput(chunks) {
+        // 暂时不支持实时输入，因为我们已经切换到REST API
+        console.warn('Realtime input is not supported with REST API');
     }
 
     /**
